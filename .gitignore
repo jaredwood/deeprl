@@ -1,0 +1,13 @@
+.idea/
+*~
+*.asv
+\#*#
+.#*
+*.pyc
+*logs/
+*bin/
+.project
+.pydevproject
+.metadata/
+.classpath
+datasets/
