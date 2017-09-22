@@ -6,6 +6,7 @@ from os.path import expanduser
 sys.path.append(expanduser("~/installs/roboschool/agent_zoo"))
 
 import numpy as np
+import matplotlib.pyplot as plt
 import tensorflow as tf
 import gym
 import roboschool #Register roboschool environments
@@ -130,10 +131,10 @@ def train(X_train, Y_train, X_dev, Y_dev, layer_dims, learning_rate=.001, miniba
 
 #TODO: Need a better approach to modularity with policy model/precition.
 
-def predictor(x_sample, parameters, layer_dims):
-    x_sample = x_sample.reshape(1, -1)
+def predictor(X, parameters, layer_dims):
+    #x_sample = x_sample.reshape(1, -1)
     #print("x_sample.shape =", x_sample.shape)
-    X = tf.placeholder(dtype=tf.float32, shape=[1, layer_dims[0]])
+    #X = tf.placeholder(dtype=tf.float32, shape=[1, layer_dims[0]])
 
     # Convert parameters to tensors.
     parameter_tensors = {}
@@ -146,43 +147,52 @@ def predictor(x_sample, parameters, layer_dims):
     logits = forward_propagation(X, parameter_tensors, layer_dims)
 
     #x_sample.shape = [1, ...] (one sample)
-    with tf.Session() as sess:
-        p = sess.run(logits, feed_dict={X: x_sample})
-        return p
+    #with tf.Session() as sess:
+    #    p = sess.run(logits, feed_dict={X: x_sample})
+    #    return p
 
-def run_clone(env, policy, num_rollouts, max_steps, render):
+    return logits
+
+def run_clone(env, parameters, layer_dims, num_rollouts, max_steps, render):
     returns = []
     observations = []
     actions = []
     #TODO: Need a steps list to index obs/acts starts corresponding to returns.
-    for i in range(num_rollouts):
-        print("episode", i)
-        steps = 0
-        totalr = 0
-        obs = env.reset()
-        while True:
-            action = np.squeeze(policy(obs))
-            #print("action:", action)
-            #print("action: (%d, %d)" % (action.shape[0], action.shape[1]), action)
+    X = tf.placeholder(dtype=tf.float32, shape=[1, layer_dims[0]])
+    predict = predictor(X, parameters, layer_dims)
+    with tf.Session() as sess:
+        #policy = lambda x : sess.run(predict, feed_dict={X: x})
+        for i in range(num_rollouts):
+            print("episode", i)
+            steps = 0
+            totalr = 0
+            obs = env.reset()
+            while True:
+                #x_sample = obs.reshape(1, -1)
+                #print("obs =", x_sample)
+                action = np.squeeze(sess.run(predict, feed_dict={X: obs.reshape(1, -1)}))
+                #action = np.squeeze(policy(obs.reshape(1, -1)))
+                #print("action:", action)
+                #print("action: (%d, %d)" % (action.shape[0], action.shape[1]), action)
 
-            observations.append(obs)
-            actions.append(action)
+                observations.append(obs)
+                actions.append(action)
 
-            obs, r, done, _ = env.step(action)
-            totalr += r
-            steps += 1
-            if render:
-                env.render()
-            if steps % 100 == 0: print("%i/%i" % (steps, max_steps))
-            if steps >= max_steps:
-                break
-        returns.append(totalr)
+                obs, r, done, _ = env.step(action)
+                totalr += r
+                steps += 1
+                if render:
+                    env.render()
+                if steps % 100 == 0: print("rollout step %i/%i" % (steps, max_steps))
+                if steps >= max_steps:
+                    break
+            returns.append(totalr)
 
-    print("returns", returns)
-    print("mean(return)", np.mean(returns))
-    print("std(return)", np.std(returns))
+        print("returns", returns)
+        print("mean(return)", np.mean(returns))
+        print("std(return)", np.std(returns))
 
-    return returns, observations, actions
+        return returns, observations, actions
 
 def run_behavioral_cloning(env_name, expert_name, layer_dims, X_train, Y_train, X_dev, Y_dev, num_epochs, max_timesteps, num_rollouts, render):
     env = gym.make(env_name)
@@ -190,12 +200,21 @@ def run_behavioral_cloning(env_name, expert_name, layer_dims, X_train, Y_train, 
     # Train the policy.
     parameters, costs_train, costs_dev = train(X_train, Y_train, X_dev, Y_dev,
                                                layer_dims=layer_dims, num_epochs=num_epochs)
+
+    # Plot training performance.
+    fig, ax = plt.subplots()
+    ax.plot(costs_train)
+    ax.plot(costs_dev)
+    plt.ylabel("cost")
+    plt.xlabel("epoch (by 100)")
+    plt.show()
+
     #policy = predictor(parameters, layer_dims)
-    policy = lambda x : predictor(x, parameters, layer_dims)
+    #policy = lambda x : predictor(x, parameters, layer_dims)
 
     #TODO: Compare the trained policy with the expert policy.
     max_steps = max_timesteps or env.spec.timestep_limit
-    clone_returns, _, _ = run_clone(env, policy, num_rollouts, max_steps, render)
+    clone_returns, _, _ = run_clone(env, parameters, layer_dims, num_rollouts, max_steps, render)
     #run_agent(...)
 
 def construct_train_dev(X, Y, train_frac=.9):
