@@ -13,48 +13,111 @@ import tensorflow as tf
 import gym
 import roboschool #Register roboschool environments
 
-def create_placeholders(n_x, n_y):
-    X = tf.placeholder(dtype=tf.float32, shape=[None, n_x])
-    Y = tf.placeholder(dtype=tf.float32, shape=[None, n_y])
-    return X, Y
+class FullyConnected(object):
+    def __init__(self, layer_dims, sess=None):
+        #layer_dims: [] layer[0] = input
 
-def initialize_parameters(layer_dims):
-    parameters = {}
-    for l in range(1, len(layer_dims)):
-        W_str = "W"+str(l)
-        parameters[W_str] = tf.get_variable(W_str, shape=[layer_dims[l-1], layer_dims[l]], initializer=tf.contrib.layers.xavier_initializer())
-        b_str = "b"+str(l)
-        parameters[b_str] = tf.get_variable(b_str, shape=[1, layer_dims[l]], initializer=tf.zeros_initializer())
-    return parameters
+        self.close_sess = False
+        if not sess:
+            sess = tf.Session()
+            self.close_sess = True
+        self.sess = sess
 
-def forward_propagation(X, parameters, layer_dims):
-    #NOTE: Follow the TF convention of X.shape = [num_samples, ...].
+        self.layer_dims = layer_dims
 
-    for l in range(1, len(layer_dims)):
-        if l == 1:
-            out = tf.matmul(X, parameters["W"+str(l)]) + parameters["b"+str(l)]
-        else:
-            out = tf.matmul(out, parameters["W"+str(l)]) + parameters["b"+str(l)]
-        if l < len(layer_dims)-1:
-            out = tf.nn.tanh(out)
-    return out
+        # Specify data slots.
+        self.X = tf.placeholder(dtype=tf.float32, shape=[None, layer_dims[0]])
+        self.Y = tf.placeholder(dtype=tf.float32, shape=[None, layer_dims[-1]])
 
-def model(X, parameters, layer_dims):
-    # Create place holders (input/labels).
-    #X, Y = create_placeholders(layer_dims[0], layer_dims[-1])
-    #X = tf.placeholder(dtype=tf.float32, shape=[None, layer_dims[0]])
+        # Initialize the parameters.
+        self.parameters = self.initialize_parameters()
 
-    # Network parameters.
-    #parameters = initialize_parameters(layer_dims)
+        # Define the computation graph.
+        self.output = self.forward_propagation(self.X)
 
-    #
-    logits = forward_propagation(X, parameters, layer_dims)
-    return logits
+        # Define the objective.
+        self.cost = self.compute_cost()
+    def __del__(self):
+        if self.close_sess: self.sess.close()
 
-def compute_cost(logits, Y):
-    #Y = tf.placeholder(dtype=tf.float32, shape=[None, n_y])
-    cost = tf.reduce_mean(tf.reduce_sum(tf.pow(logits - Y, 2.), axis=1))
-    return cost
+    def initialize_parameters(self):
+        parameters = {}
+        for l in range(1, len(self.layer_dims)):
+            W_str = "W"+str(l)
+            parameters[W_str] = tf.get_variable(W_str, shape=[self.layer_dims[l-1], self.layer_dims[l]], initializer=tf.contrib.layers.xavier_initializer())
+            b_str = "b"+str(l)
+            parameters[b_str] = tf.get_variable(b_str, shape=[1, self.layer_dims[l]], initializer=tf.zeros_initializer())
+        return parameters
+
+    def forward_propagation(self, X):
+        #NOTE: Follow the TF convention of X.shape = [num_samples, ...].
+
+        for l in range(1, len(self.layer_dims)):
+            if l == 1:
+                out = tf.matmul(X, self.parameters["W"+str(l)]) + self.parameters["b"+str(l)]
+            else:
+                out = tf.matmul(out, self.parameters["W"+str(l)]) + self.parameters["b"+str(l)]
+            if l < len(self.layer_dims)-1:
+                out = tf.nn.tanh(out)
+        return out
+
+    def compute_cost(self):
+        #Y = tf.placeholder(dtype=tf.float32, shape=[None, n_y])
+        cost = tf.reduce_mean(tf.reduce_sum(tf.pow(self.output - self.Y, 2.), axis=1))
+        return cost
+
+    def train(self, X_train, Y_train, X_dev, Y_dev, learning_rate=.001, minibatch_size=64, num_epochs=1000):
+        #layer_dims = [n_x, 100, 100, n_y]
+
+        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(self.cost)
+
+        init = tf.global_variables_initializer()
+
+        #NOTE: This is shuffling the data so it loses its sequential nature.
+        #      Technically loses information doing this.
+        #      Maybe try a recurrent model and sequential rollouts for training?
+
+        self.sess.run(init) # Iniitialize the variables.
+
+        costs_train = []
+        costs_dev = []
+        for epoch in range(num_epochs):
+
+            # Get the minibatches.
+            minibatches = minibatch_shuffle(X_train, Y_train, minibatch_size)
+            num_minibatches = len(minibatches)
+
+            epoch_cost = 0.
+            for minibatch in minibatches:
+                # Fetch minibatch data.
+                X_mini, Y_mini = minibatch
+                feed_dict = {self.X: X_mini, self.Y: Y_mini}
+                _, minibatch_cost = self.sess.run([optimizer, self.cost], feed_dict=feed_dict)
+                epoch_cost += minibatch_cost / num_minibatches
+
+            if epoch % 100 == 0 or epoch == num_epochs-1:
+                # Check performance on training and dev sets.
+
+                # Dev cost.
+                dev_cost = self.sess.run(self.cost, feed_dict={self.X: X_dev, self.Y: Y_dev})
+
+                costs_train.append(epoch_cost)
+                costs_dev.append(dev_cost)
+
+                print("Epoch %d: cost (train) = %f" % (epoch, epoch_cost))
+                print("          cost (dev)   = %f" %(dev_cost))
+
+        # Get learned parameters.
+        params = self.sess.run(self.parameters)
+        return params, costs_train, costs_dev
+
+    def predict(self, x_sample):
+        x_sample = x_sample.reshape(1, -1)
+
+        p = self.sess.run(self.output, feed_dict={self.X: x_sample})
+
+        #NOTE: This is currently a regression so output is prediction.
+        return p
 
 def minibatch_shuffle(X, Y, minibatch_size=64):
     # X.shape = [num_samples, ...]
@@ -78,130 +141,45 @@ def minibatch_shuffle(X, Y, minibatch_size=64):
 
     return minibatches
 
-#TODO: Need to better structure model...into class.
-#      Model should have predict method.
-#      Create policy with learned model.
-
-def train(X_train, Y_train, X_dev, Y_dev, layer_dims, learning_rate=.001, minibatch_size=64, num_epochs=1000):
-    #layer_dims = [n_x, 100, 100, n_y]
-    X, Y = create_placeholders(layer_dims[0], layer_dims[-1])
-    parameters = initialize_parameters(layer_dims)
-    logits = model(X, parameters, layer_dims) #actions
-    cost = compute_cost(logits, Y)
-    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
-
-    init = tf.global_variables_initializer()
-
-    #NOTE: This is shuffling the data so it loses its sequential nature.
-    #      Technically loses information doing this.
-    #      Maybe try a recurrent model and sequential rollouts for training?
-
-    with tf.Session() as sess:
-        sess.run(init) # Iniitialize the variables.
-
-        costs_train = []
-        costs_dev = []
-        for epoch in range(num_epochs):
-
-            # Get the minibatches.
-            minibatches = minibatch_shuffle(X_train, Y_train, minibatch_size)
-            num_minibatches = len(minibatches)
-
-            epoch_cost = 0.
-            for minibatch in minibatches:
-                # Fetch minibatch data.
-                X_mini, Y_mini = minibatch
-                feed_dict = {X: X_mini, Y: Y_mini}
-                _, minibatch_cost = sess.run([optimizer, cost], feed_dict=feed_dict)
-                epoch_cost += minibatch_cost / num_minibatches
-
-            if epoch % 100 == 0 or epoch == num_epochs-1:
-                # Check performance on training and dev sets.
-
-                # Dev cost.
-                dev_cost = sess.run(cost, feed_dict={X: X_dev, Y: Y_dev})
-
-                costs_train.append(epoch_cost)
-                costs_dev.append(dev_cost)
-
-                print("Epoch %d: cost (train) = %f" % (epoch, epoch_cost))
-                print("          cost (dev)   = %f" %(dev_cost))
-
-        # Get learned parameters.
-        params = sess.run(parameters)
-        return params, costs_train, costs_dev
-
-#TODO: Need a better approach to modularity with policy model/precition.
-
-def predictor(X, parameters, layer_dims):
-    #x_sample = x_sample.reshape(1, -1)
-    #print("x_sample.shape =", x_sample.shape)
-    #X = tf.placeholder(dtype=tf.float32, shape=[1, layer_dims[0]])
-
-    # Convert parameters to tensors.
-    parameter_tensors = {}
-    for l in range(1, len(layer_dims)):
-        W_str = "W" + str(l)
-        parameter_tensors[W_str] = tf.convert_to_tensor(parameters[W_str])
-        b_str = "b" + str(l)
-        parameter_tensors[b_str] = tf.convert_to_tensor(parameters[b_str])
-
-    logits = forward_propagation(X, parameter_tensors, layer_dims)
-
-    #x_sample.shape = [1, ...] (one sample)
-    #with tf.Session() as sess:
-    #    p = sess.run(logits, feed_dict={X: x_sample})
-    #    return p
-
-    return logits
-
-def run_clone(env, parameters, layer_dims, num_rollouts, max_steps, render):
+def run_clone(env, policy, num_rollouts, max_steps, render):
     returns = []
     observations = []
     actions = []
+
     #TODO: Need a steps list to index obs/acts starts corresponding to returns.
-    X = tf.placeholder(dtype=tf.float32, shape=[1, layer_dims[0]])
-    predict = predictor(X, parameters, layer_dims)
-    with tf.Session() as sess:
-        #policy = lambda x : sess.run(predict, feed_dict={X: x})
-        for i in range(num_rollouts):
-            print("episode", i)
-            steps = 0
-            totalr = 0
-            obs = env.reset()
-            while True:
-                #x_sample = obs.reshape(1, -1)
-                #print("obs =", x_sample)
-                action = np.squeeze(sess.run(predict, feed_dict={X: obs.reshape(1, -1)}))
-                #action = np.squeeze(policy(obs.reshape(1, -1)))
-                #print("action:", action)
-                #print("action: (%d, %d)" % (action.shape[0], action.shape[1]), action)
 
-                observations.append(obs)
-                actions.append(action)
+    for i in range(num_rollouts):
+        print("episode", i)
+        steps = 0
+        totalr = 0
+        obs = env.reset()
+        while True:
+            action = np.squeeze(policy(obs))
 
-                obs, r, done, _ = env.step(action)
-                totalr += r
-                steps += 1
-                if render:
-                    env.render()
-                if steps % 100 == 0: print("rollout step %i/%i" % (steps, max_steps))
-                if steps >= max_steps:
-                    break
-            returns.append(totalr)
+            observations.append(obs)
+            actions.append(action)
 
-        print("returns", returns)
-        print("mean(return)", np.mean(returns))
-        print("std(return)", np.std(returns))
+            obs, r, done, _ = env.step(action)
+            totalr += r
+            steps += 1
+            if render:
+                env.render()
+            if steps % 100 == 0: print("rollout step %i/%i" % (steps, max_steps))
+            if steps >= max_steps:
+                break
+        returns.append(totalr)
 
-        return returns, observations, actions
+    print("returns", returns)
+    print("mean(return)", np.mean(returns))
+    print("std(return)", np.std(returns))
 
-def run_behavioral_cloning(env_name, expert_name, layer_dims, X_train, Y_train, X_dev, Y_dev, num_epochs, max_timesteps, num_rollouts, render):
-    env = gym.make(env_name)
+    return returns, observations, actions
+
+def run_behavioral_cloning(model, X_train, Y_train, X_dev, Y_dev, num_epochs, render):
 
     # Train the policy.
-    parameters, costs_train, costs_dev = train(X_train, Y_train, X_dev, Y_dev,
-                                               layer_dims=layer_dims, num_epochs=num_epochs)
+    parameters, costs_train, costs_dev = model.train(X_train, Y_train, X_dev, Y_dev,
+                                                     num_epochs=num_epochs)
 
     # Plot training performance.
     fig, ax = plt.subplots()
@@ -211,16 +189,10 @@ def run_behavioral_cloning(env_name, expert_name, layer_dims, X_train, Y_train, 
     plt.xlabel("epoch (by 100)")
     plt.show()
 
-    #policy = predictor(parameters, layer_dims)
-    #policy = lambda x : predictor(x, parameters, layer_dims)
+    policy = lambda x : model.predict(x)
 
-    #TODO: Compare the trained policy with the expert policy.
-    max_steps = max_timesteps or env.spec.timestep_limit
-    clone_returns, _, _ = run_clone(env, parameters, layer_dims, num_rollouts, max_steps, render)
-    #run_agent(...)
-
-    # Return model weights and performance metrics.
-    return parameters
+    # Return policy, model weights, and performance metrics.
+    return policy, parameters
 
 def construct_train_dev(X, Y, train_frac=.9):
     # shape = [num_samples, ...].
@@ -260,12 +232,25 @@ def main():
     print("X_dev.shape =", X_dev.shape)
     print("Y_dev.shape =", Y_dev.shape)
 
+    # Define the clone model.
     layer_dims = [X_train.shape[1], 100, 100, Y_train.shape[1]]
-    parameters = run_behavioral_cloning(args.env_name, args.expert_name, layer_dims, X_train, Y_train, X_dev, Y_dev, args.num_epochs, args.max_timesteps, args.num_rollouts, args.render)
+    #with tf.Session() as sess:
+    # Build the clone model.
+    model = FullyConnected(layer_dims)#, sess)
+
+    policy, parameters = run_behavioral_cloning(model, X_train, Y_train, X_dev, Y_dev, args.num_epochs, args.render)
 
     print("Writing model parameters to file.")
     with open("datasets/parameters-" + args.env_name + "-steps" + str(args.max_timesteps) + "-rollouts" + str(args.num_rollouts) + "-epochs" + str(args.num_epochs) + ".pickle", "wb") as f:
         pickle.dump(parameters, f)
+
+    #TODO: Test the learned policy against the expert policy.
+    env = gym.make(args.env_name)
+    max_steps = args.max_timesteps or env.spec.timestep_limit
+    ##
+    print("Running trained clone:")
+    clone_returns, _, _ = run_clone(env, policy, args.num_rollouts, max_steps, args.render)
+    #run_agent(...)
 
     return 0
 
