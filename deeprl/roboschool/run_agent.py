@@ -1,7 +1,9 @@
 import sys
 import importlib
 from os.path import expanduser
-sys.path.append(expanduser("~/installs/roboschool/agent_zoo"))
+
+from deeprl.sys_util.util import find_dir
+sys.path.append(find_dir(expanduser("~"), "agent_zoo"))
 
 import numpy as np
 import tensorflow as tf

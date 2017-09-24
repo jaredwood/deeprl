@@ -3,7 +3,9 @@ import argparse
 import pickle
 import importlib
 from os.path import expanduser
-sys.path.append(expanduser("~/installs/roboschool/agent_zoo"))
+
+from deeprl.sys_util.util import find_dir
+sys.path.append(find_dir(expanduser("~"), "agent_zoo"))
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -217,6 +219,9 @@ def run_behavioral_cloning(env_name, expert_name, layer_dims, X_train, Y_train, 
     clone_returns, _, _ = run_clone(env, parameters, layer_dims, num_rollouts, max_steps, render)
     #run_agent(...)
 
+    # Return model weights and performance metrics.
+    return parameters
+
 def construct_train_dev(X, Y, train_frac=.9):
     # shape = [num_samples, ...].
     num_samples = X.shape[0]
@@ -256,7 +261,13 @@ def main():
     print("Y_dev.shape =", Y_dev.shape)
 
     layer_dims = [X_train.shape[1], 100, 100, Y_train.shape[1]]
-    run_behavioral_cloning(args.env_name, args.expert_name, layer_dims, X_train, Y_train, X_dev, Y_dev, args.num_epochs, args.max_timesteps, args.num_rollouts, args.render)
+    parameters = run_behavioral_cloning(args.env_name, args.expert_name, layer_dims, X_train, Y_train, X_dev, Y_dev, args.num_epochs, args.max_timesteps, args.num_rollouts, args.render)
+
+    print("Writing model parameters to file.")
+    with open("datasets/parameters-" + args.env_name + "-steps" + str(args.max_timesteps) + "-rollouts" + str(args.num_rollouts) + "-epochs" + str(args.num_epochs) + ".pickle", "wb") as f:
+        pickle.dump(parameters, f)
+
+    return 0
 
 if __name__ == "__main__":
     main()
