@@ -14,43 +14,10 @@ import gym
 import roboschool #Register roboschool environments
 
 from deeprl.model.fully_connected import FullyConnected
+from deeprl.imitation.run_agent import run_agent
 import deeprl.data_util.dataset as ds
 
-def run_clone(env, policy, num_rollouts, max_steps, render):
-    returns = []
-    observations = []
-    actions = []
-
-    #TODO: Need a steps list to index obs/acts starts corresponding to returns.
-
-    for i in range(num_rollouts):
-        print("episode", i)
-        steps = 0
-        totalr = 0
-        obs = env.reset()
-        while True:
-            action = np.squeeze(policy(obs))
-
-            observations.append(obs)
-            actions.append(action)
-
-            obs, r, done, _ = env.step(action)
-            totalr += r
-            steps += 1
-            if render:
-                env.render()
-            if steps % 100 == 0: print("rollout step %i/%i" % (steps, max_steps))
-            if steps >= max_steps:
-                break
-        returns.append(totalr)
-
-    print("returns", returns)
-    print("mean(return)", np.mean(returns))
-    print("std(return)", np.std(returns))
-
-    return returns, observations, actions
-
-def run_behavioral_cloning(model, X_train, Y_train, X_dev, Y_dev, num_epochs, render):
+def run_behavioral_cloning(model, X_train, Y_train, X_dev, Y_dev, num_epochs):
 
     # Train the policy.
     parameters, costs_train, costs_dev = model.train(X_train, Y_train, X_dev, Y_dev,
@@ -78,10 +45,10 @@ def main():
     parser.add_argument('--render', action='store_true')
     parser.add_argument("--num_epochs", type=int, default=1000,
                         help="Number of training epochs.")
-    parser.add_argument("--max_timesteps", type=int, default=200,
-                        help="Max number of time steps per rollout in testing.")
     parser.add_argument('--num_rollouts', type=int, default=20,
                         help='Number of rollouts in testing.')
+    parser.add_argument("--max_timesteps", type=int, default=200,
+                        help="Max number of time steps per rollout in testing.")
     args = parser.parse_args()
 
     # Load the expert data.
@@ -102,18 +69,17 @@ def main():
     # Build the clone model.
     model = FullyConnected(layer_dims)#, sess)
 
-    policy, parameters = run_behavioral_cloning(model, X_train, Y_train, X_dev, Y_dev, args.num_epochs, args.render)
+    policy, parameters = run_behavioral_cloning(model, X_train, Y_train, X_dev, Y_dev, args.num_epochs)
 
     print("Writing model parameters to file.")
-    with open("datasets/parameters-" + args.env_name + "-steps" + str(args.max_timesteps) + "-rollouts" + str(args.num_rollouts) + "-epochs" + str(args.num_epochs) + ".pickle", "wb") as f:
+    with open("datasets/parameters-bc-" + args.env_name + "-epochs" + str(args.num_epochs) + ".pickle", "wb") as f:
         pickle.dump(parameters, f)
 
     #TODO: Test the learned policy against the expert policy.
     env = gym.make(args.env_name)
-    max_steps = args.max_timesteps or env.spec.timestep_limit
     ##
     print("Running trained clone:")
-    clone_returns, _, _ = run_clone(env, policy, args.num_rollouts, max_steps, args.render)
+    clone_returns, _, _ = run_agent(env, policy, args.num_rollouts, args.max_timesteps, args.render)
     #run_agent(...)
 
     return 0
