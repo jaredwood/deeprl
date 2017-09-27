@@ -21,9 +21,11 @@ import deeprl.data_util.dataset as ds
 def run_dagger(env, model, expert_policy, X_train, Y_train, X_dev, Y_dev, num_iterations, num_epochs, num_sim_rollouts, num_sim_steps):
     final_costs_train = []
     final_costs_dev = []
+    returns_mean = []
+    returns_std = []
     for i in range(num_iterations):
         # Train the policy.
-        print("Training new clone...")
+        print("Iteration %d: Training new clone..." % i)
         parameters, costs_train, costs_dev = model.train(X_train, Y_train, X_dev, Y_dev,
                                                          num_epochs=num_epochs)
         policy = lambda x : model.predict(x)
@@ -36,14 +38,20 @@ def run_dagger(env, model, expert_policy, X_train, Y_train, X_dev, Y_dev, num_it
         #plt.xlabel("epoch (by 100)")
         #plt.show()
 
-        final_costs_train.append(costs_train)
-        final_costs_dev.append(costs_dev)
-
-        if i >= num_iterations-1: break
+        #print("len(costs_train):", len(costs_train))
+        #print("costs_train.shape:", np.array(costs_train).shape)
+        final_costs_train.append(costs_train[-1])
+        final_costs_dev.append(costs_dev[-1])
 
         # Simulate clone observations.
         print("Collecting trained-clone observations...")
         returns, observations, _ = run_agent(env, policy, num_sim_rollouts, num_sim_steps, render=False)
+
+        returns_mean.append(np.mean(np.array(returns)))
+        returns_std.append(np.std(np.array(returns)))
+        print("Iteration %d: mean(returns) = %f, std(returns) = %f" % (i, returns_mean[i], returns_std[i]))
+
+        if i >= num_iterations-1: break
 
         # Expert-label clone observations.
         print("Expert-labeling clone-generated observations...")
@@ -66,6 +74,14 @@ def run_dagger(env, model, expert_policy, X_train, Y_train, X_dev, Y_dev, num_it
     ax.plot(np.array(final_costs_dev))
     plt.ylabel("final training cost per dagger iteration")
     plt.xlabel("dagger iteration")
+    plt.legend(("train", "dev"))
+
+    # Plot mean returns.
+    fig, ax = plt.subplots()
+    ax.plot(np.array(returns_mean))
+    plt.ylabel("return")
+    plt.xlabel("dagger iteration")
+
     plt.show()
 
     # Return policy, model weights, and performance metrics.

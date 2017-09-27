@@ -32,8 +32,8 @@ def run_agent(env, policy, num_rollouts, max_steps, render=True):
                 break
         returns.append(totalr)
 
-    print("returns", returns)
-    print("mean(return)", np.mean(returns))
-    print("std(return)", np.std(returns))
+    #print("returns", returns)
+    print("episode %d: mean(return)" % i, np.mean(returns))
+    print("            std(return)", np.std(returns))
 
     return returns, observations, actions
