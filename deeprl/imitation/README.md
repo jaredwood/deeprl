@@ -15,3 +15,6 @@ At first glance you are tempted to think this will work, and it can kind of appe
 One way to address this problem is to iteratively add observations the clone experiences and have the expert label (choose actions) for the clone-generated observations. Then the policy model is retrained with this additional data. And this loop repeats through training. This method is call DAgger (dataset aggregation). An implementation of this can be seen in dagger.py.
 
 Notice that DAgger requires a potentially much slower training loop. First, clone-generated observations have to be generated. These have to be simulated. Second, the expert has to label the clone-generated observations. This either requires the expert as a function or (in reality) requires additional labeling. So the training loop is not generally a typical machine learning iteration.
+
+#TODO
+* Try using recurrent network for policy model.
