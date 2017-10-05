@@ -22,7 +22,7 @@ def gaussian_log_prob(x_sample, means, log_std):
     #  = -n/2 * log(2*pi) - n/2 * log(std^2) - 1/(2*std^2) * sum((xj-muj)^2)
     #  = -n/2 * log(2*pi) - n * log_std - 1/(2*exp(2*log_std)) * sum((xj-muj)^2)
     assert(x_sample.shape[1] == means.shape[1])
-    log_probs = -.5 * tf.log(tf.constant(2*np.pi)) - tf.square(x_sample - means) / tf.exp(2*log_std)
+    log_probs = -.5 * tf.log(tf.constant(2*np.pi)) - log_std - .5 * tf.square(x_sample - means) / tf.exp(2*log_std)
     # size = (n, a)
     # log_prob = sum(log_probs) ==> log_prob.size = (n,)
     return tf.reduce_sum(log_probs, axis=1)
@@ -65,7 +65,34 @@ def build_mlp(
 def pathlength(path):
     return len(path["reward"])
 
-
+def sample_trajectory(env, policy_sample, max_path_length, discrete, animate_this_episode):
+    ob = env.reset()
+    obs, acs, rewards = [], [], []
+    steps = 0
+    done = False
+    while not done:
+        if animate_this_episode:
+            env.render()
+            time.sleep(0.05)
+        obs.append(ob)
+        #ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no : ob[None]}) #NOTE: Single observation, single action.
+        ac = policy_sample(ob[None]) #TODO: What's ob[None] do?
+        #print("action: type:", type(ac), ", shape:", ac.shape, ", value:", ac)
+        #ac = np.squeeze(ac)
+        ac = ac[0] #NOTE: This works for roboschool.
+        #print("action: type:", type(ac), ", shape:", ac.shape, ", value:", ac)
+        if discrete and len(ac) == 1:
+            ac = ac[0] #TODO: Roboschool seems to handle differently than discrete gym? Needs an array.
+        acs.append(ac)
+        ob, rew, done, _ = env.step(ac)
+        rewards.append(rew)
+        steps += 1
+        if steps > max_path_length: #TODO: There is a max path length just in case things go wonderfully.
+            break
+    path = {"observation" : np.array(obs),
+            "reward" : np.array(rewards),
+            "action" : np.array(acs)}
+    return path
 
 #============================================================================================#
 # Policy Gradient
@@ -280,12 +307,16 @@ def train_PG(exp_name='',
                                  activation=tf.tanh, #TODO: What is a good activationfor this?
                                  output_activation=None)
         ## Operation for sampling actions from the policy distribution.
-        sy_sampled_ac = tf.multinomial(sy_logits_na, num_samples=1)#[0] #TODO: Remove this zero index. # Hint: Use the tf.multinomial op
+        sy_sampled_ac = tf.multinomial(sy_logits_na, num_samples=1) # Hint: Use the tf.multinomial op
         ## Operation for log likelihood of input actions.
-        #NOTE: For a discrete action space where only one action can be chosen, the probability distribution is
-        #      p(a) = prod p_i^
-        #the negative log likelihood is
-        #      -log p()
+        #NOTE: For a discrete action space (only one category chosen at a time) the probability of an action (action likelihood) is
+        #        p(a=i) = prod p_i
+        #      This is generalized by one-hot encoding an action (a_i = 1 if a==i else 0).
+        #      Then the action probability (likelihood) is then
+        #        prod_i p_i^a_i <-- product = p_i
+        #      And the negative log likelihood is
+        #        -log p(a) = - sum_i a_i * log p_i
+        #                  = H(a, p) <-- cross entropy of p(a) with one-hot-encoding actions
         sy_logprob_n = tf.nn.softmax_cross_entropy_with_logits(labels=tf.one_hot(sy_ac_na, ac_dim, 1., 0.), logits=sy_logits_na) #NOTE: negative log likelihoods
         #print("logits:", sy_logits_na)
         #print("labels:", sy_ac_na)
@@ -313,10 +344,12 @@ def train_PG(exp_name='',
                             output_activation=None)
         ###The std dev is a learned parameter!
         sy_logstd = tf.get_variable("sy_logstd", [ac_dim], initializer=tf.zeros_initializer()) # logstd should just be a trainable variable, not a network output.
+        sy_num_batch = tf.shape(sy_ob_no)[0]
+        sy_logstd_na = tf.ones(shape=(sy_num_batch, ac_dim), dtype=tf.float32) * sy_logstd
         ## Define an operation for sampling from this policy distribution.
-        sy_sampled_ac = tf.random_normal(sy_mean.shape) * tf.exp(sy_logstd) + sy_mean
+        sy_sampled_ac = tf.random_normal(tf.shape(sy_mean)) * tf.exp(sy_logstd_na) + sy_mean
         ## Define an operation for computing the log_prob of an input set of actions.
-        sy_logprob_n = - gaussian_log_prob(sy_ac_na, sy_mean, sy_logstd)  # Hint: Use the log probability under a multivariate gaussian.
+        sy_logprob_n = - gaussian_log_prob(sy_ac_na, sy_mean, sy_logstd_na)  # Hint: Use the log probability under a multivariate gaussian.
 
 
 
@@ -366,12 +399,17 @@ def train_PG(exp_name='',
     # Training Loop
     #========================================================================================#
 
+    print("action space:", env.action_space)
+
     total_timesteps = 0
 
     for itr in range(n_iter):
         print("********** Iteration %i ************"%itr)
 
         # Collect data (generate trajectories) for this batch.
+
+        # Action policy sampler.
+        policy_sample = lambda x : sess.run(sy_sampled_ac, feed_dict={sy_ob_no : x})
 
         # Generate trajectories for this batch.
         # Add paths until the cummulative timesteps > min_timesteps_per_batch.
@@ -380,26 +418,9 @@ def train_PG(exp_name='',
         timesteps_this_batch = 0
         paths = []
         while True:
-            ob = env.reset()
-            obs, acs, rewards = [], [], []
-            animate_this_episode=(len(paths)==0 and (itr % 10 == 0) and animate)
-            steps = 0
-            while True:
-                if animate_this_episode:
-                    env.render()
-                    time.sleep(0.05)
-                obs.append(ob)
-                ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no : ob[None]}) #NOTE: Single observation, single action.
-                ac = np.squeeze(ac)
-                acs.append(ac)
-                ob, rew, done, _ = env.step(ac)
-                rewards.append(rew)
-                steps += 1
-                if done or steps > max_path_length:
-                    break
-            path = {"observation" : np.array(obs),
-                    "reward" : np.array(rewards),
-                    "action" : np.array(acs)}
+            #animate_this_episode=(len(paths)==0 and (itr % 10 == 0) and animate)
+            animate_this_episode = (itr == n_iter-1 and animate)
+            path = sample_trajectory(env, policy_sample, max_path_length, discrete, animate_this_episode)
             paths.append(path)
             timesteps_this_batch += pathlength(path)
             if timesteps_this_batch > min_timesteps_per_batch:
@@ -568,16 +589,24 @@ def train_PG(exp_name='',
                      sy_num_paths: [len(paths)]}
         print("num_batch:", sess.run(tf.shape(sy_ac_na)[0], feed_dict=feed_dict))
         print("num_paths:", sess.run(sy_num_paths[0], feed_dict=feed_dict))
-        print("one-hot actions:")
-        print(sess.run(tf.one_hot(sy_ac_na, ac_dim, 1., 0.), feed_dict=feed_dict))
-        print("logits:")
-        print(sess.run(sy_logits_na, feed_dict=feed_dict))
-        print("softmax(policy logits):")
-        print(sess.run(tf.nn.softmax(sy_logits_na), feed_dict=feed_dict))
-        print("cross entropies:")
-        print(sess.run(sy_logprob_n, feed_dict=feed_dict))
-        print("test action samples:")
-        print(sess.run(tf.multinomial(sy_logits_na, num_samples=1), feed_dict=feed_dict))
+        if discrete:
+            print("one-hot actions:")
+            print(sess.run(tf.one_hot(sy_ac_na, ac_dim, 1., 0.), feed_dict=feed_dict))
+            print("logits:")
+            print(sess.run(sy_logits_na, feed_dict=feed_dict))
+            print("softmax(policy logits):")
+            print(sess.run(tf.nn.softmax(sy_logits_na), feed_dict=feed_dict))
+            print("neg log probs (cross entropies):")
+            print(sess.run(sy_logprob_n, feed_dict=feed_dict))
+            print("test action samples:")
+            print(sess.run(tf.multinomial(sy_logits_na, num_samples=1), feed_dict=feed_dict))
+        else:
+            print("logstd:", sess.run(sy_logstd))
+            #print("logstd_na:", sess.run(sy_logstd_na, feed_dict=feed_dict))
+            print("actions:")
+            print(ac_na)
+            print("neg log probs (gaussian log prob):")
+            print(sess.run(sy_logprob_n, feed_dict=feed_dict))
         #loss_val_prev = sess.run(loss, feed_dict=feed_dict)
         _, loss_val = sess.run([update_op, loss], feed_dict=feed_dict)
 
