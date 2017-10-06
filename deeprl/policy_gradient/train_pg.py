@@ -380,7 +380,9 @@ def train_PG(exp_name='',
         # Define placeholders for targets, a loss function and an update op for fitting a
         # neural network baseline. These will be used to fit the neural network baseline.
         # YOUR_CODE_HERE
-        baseline_update_op = TODO
+        sy_b_target_n = tf.placeholder(name="b_target", shape=(None), dtype=tf.float32)
+        baseline_loss = tf.reduce_sum(tf.square(baseline_prediction - sy_b_target_n))
+        baseline_update_op = tf.train.AdamOptimizer(learning_rate).minimize(baseline_loss)
 
 
     #========================================================================================#
@@ -514,6 +516,8 @@ def train_PG(exp_name='',
         else:
             # For each timestep use the full trajectory's return.
             q_n = np.concatenate([np.ones(q_path.shape) * q_path[0] for q_path in q_paths])
+        q_mean = np.mean(q_n)
+        q_std = np.std(q_n)
         #print("q_paths:")
         #print(q_paths)
         #print("q_n:")
@@ -533,7 +537,19 @@ def train_PG(exp_name='',
             # (mean and std) of the current or previous batch of Q-values. (Goes with Hint
             # #bl2 below.)
 
-            b_n = TODO
+            #NOTE: Assume the baseline is predicting a mean zero std 1 target.
+            #      Ensure this when feeding the target for training the baseline.
+            # Get the baseline prediction.
+            b_n = sess.run(baseline_prediction, feed_dict={sy_ob_no: ob_no})
+            # Get the baseline mean/std.
+            #b_mean = tf.reduce_mean(b_n)
+            #b_std = tf.reduce_mean(tf.square(b_n - b_mean))
+            # Rescale b_n.
+            #b_n = (b_n - b_mean) / b_std * q_std + q_mean
+            if q_std > 1.e-9: #TODO: How to handle case of zero std dev?
+                b_n = b_n * q_std
+            b_n = b_n + q_mean
+            # Subtract baseline from reward to go for advantage.
             adv_n = q_n - b_n
         else:
             adv_n = q_n.copy()
@@ -550,7 +566,9 @@ def train_PG(exp_name='',
             mean_adv = np.mean(adv_n)
             std_adv = np.std(adv_n)
             #print("std_adv:", std_adv)
-            adv_n = (adv_n - mean_adv) / std_adv
+            adv_n = adv_n - mean_adv
+            if std_adv > 1.e-9: #TODO: How to handle case of zero std dev?
+                adv_n = adv_n / std_adv
 
 
         #====================================================================================#
@@ -569,7 +587,10 @@ def train_PG(exp_name='',
             # targets to have mean zero and std=1. (Goes with Hint #bl1 above.)
 
             # YOUR_CODE_HERE
-            pass
+            #q_mean = np.mean(q_n)
+            #q_std = np.std(q_n)
+            b_target_n = (q_n - q_mean) / q_std
+            _, b_loss_val = sess.run([baseline_update_op, baseline_loss], feed_dict={sy_ob_no: ob_no, sy_b_target_n: b_target_n})
 
         #====================================================================================#
         #                           ----------SECTION 4----------
@@ -607,6 +628,11 @@ def train_PG(exp_name='',
             print(ac_na)
             print("neg log probs (gaussian log prob):")
             print(sess.run(sy_logprob_n, feed_dict=feed_dict))
+        if nn_baseline:
+            print("b_n:")
+            print(b_n)
+            print("q_n:")
+            print(q_n)
         #loss_val_prev = sess.run(loss, feed_dict=feed_dict)
         _, loss_val = sess.run([update_op, loss], feed_dict=feed_dict)
 
