@@ -340,7 +340,7 @@ def train_PG(exp_name='',
                             output_size=ac_dim,
                             scope="sy_mean",
                             hidden_layers=hidden_layers,
-                            activation=tf.tanh, #TODO: What is a good activation for this?
+                            activation=tf.nn.relu, #TODO: What is a good activation for this?
                             output_activation=None)
         ###The std dev is a learned parameter!
         sy_logstd = tf.get_variable("sy_logstd", [ac_dim], initializer=tf.zeros_initializer()) # logstd should just be a trainable variable, not a network output.
@@ -359,8 +359,8 @@ def train_PG(exp_name='',
     #========================================================================================#
     #NOTE: The objective is to sum over the sample run the products of
     #        each log_prob_t * advantage_t <-- A = (Q - b)
-    #loss = tf.reduce_mean(sy_logprob_n * sy_adv_n) # Loss function that we'll differentiate to get the policy gradient.
-    loss = tf.reduce_sum(sy_logprob_n * sy_adv_n) / sy_num_paths[0] # Loss function that we'll differentiate to get the policy gradient.
+    loss = tf.reduce_mean(sy_logprob_n * sy_adv_n) # Loss function that we'll differentiate to get the policy gradient.
+    #loss = tf.reduce_sum(sy_logprob_n * sy_adv_n) / sy_num_paths[0] # Loss function that we'll differentiate to get the policy gradient.
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
 
 
@@ -371,17 +371,20 @@ def train_PG(exp_name='',
 
     if nn_baseline:
         baseline_prediction = tf.squeeze(build_mlp(
-                                sy_ob_no,
-                                1,
-                                "nn_baseline",
+                                input_placeholder=sy_ob_no,
+                                output_size=1,
+                                scope="nn_baseline",
                                 #n_layers=n_layers,
                                 #size=size
-                                hidden_layers=hidden_layers))
+                                #hidden_layers=hidden_layers,
+                                hidden_layers=[50, 50], #TODO: Input this.
+                                activation=tf.tanh,
+                                output_activation=None))
         # Define placeholders for targets, a loss function and an update op for fitting a
         # neural network baseline. These will be used to fit the neural network baseline.
         # YOUR_CODE_HERE
-        sy_b_target_n = tf.placeholder(name="b_target", shape=(None), dtype=tf.float32)
-        baseline_loss = tf.reduce_sum(tf.square(baseline_prediction - sy_b_target_n))
+        sy_b_target_n = tf.placeholder(name="b_target", shape=[None], dtype=tf.float32)
+        baseline_loss = tf.reduce_mean(tf.square(baseline_prediction - sy_b_target_n))
         baseline_update_op = tf.train.AdamOptimizer(learning_rate).minimize(baseline_loss)
 
 
@@ -518,6 +521,7 @@ def train_PG(exp_name='',
             q_n = np.concatenate([np.ones(q_path.shape) * q_path[0] for q_path in q_paths])
         q_mean = np.mean(q_n)
         q_std = np.std(q_n)
+        print("q_n: mean:", q_mean, ", std:", q_std)
         #print("q_paths:")
         #print(q_paths)
         #print("q_n:")
@@ -541,10 +545,18 @@ def train_PG(exp_name='',
             #      Ensure this when feeding the target for training the baseline.
             # Get the baseline prediction.
             b_n = sess.run(baseline_prediction, feed_dict={sy_ob_no: ob_no})
+            #print("b_n: type:", type(b_n), ", val:", b_n)
             # Get the baseline mean/std.
-            #b_mean = tf.reduce_mean(b_n)
+            b_mean = np.mean(b_n)
             #b_std = tf.reduce_mean(tf.square(b_n - b_mean))
-            # Rescale b_n.
+            b_std = np.std(b_n)
+            print("b_n: mean:", b_mean, ", std:", b_std, "<-- target b should be about 0 and 1!")
+            # Normalize b_n.
+            b_n = b_n - b_mean
+            if b_std > 1.e-9:
+                b_n = b_n / b_std
+            # Now rescale b_n to hav same metrics as q_n.
+            #TODO: Should be using the previous value of q_n really.
             #b_n = (b_n - b_mean) / b_std * q_std + q_mean
             if q_std > 1.e-9: #TODO: How to handle case of zero std dev?
                 b_n = b_n * q_std
@@ -565,10 +577,14 @@ def train_PG(exp_name='',
             # YOUR_CODE_HERE
             mean_adv = np.mean(adv_n)
             std_adv = np.std(adv_n)
-            #print("std_adv:", std_adv)
+            print("adv_n: mean:", mean_adv, ", std:", std_adv)
             adv_n = adv_n - mean_adv
             if std_adv > 1.e-9: #TODO: How to handle case of zero std dev?
                 adv_n = adv_n / std_adv
+            print("adv_n normalized: mean:", np.mean(adv_n), ", std:", np.std(adv_n))
+        else:
+            print("adv_n: mean:", np.mean(adv_n), ", std:", np.std(adv_n))
+            #pass
 
 
         #====================================================================================#
@@ -589,7 +605,11 @@ def train_PG(exp_name='',
             # YOUR_CODE_HERE
             #q_mean = np.mean(q_n)
             #q_std = np.std(q_n)
-            b_target_n = (q_n - q_mean) / q_std
+            b_target_n = q_n - q_mean
+            if q_std > 1.e-9:
+                b_target_n = b_target_n / q_std
+            #b_target_n = (q_n - q_mean) / q_std
+            print("b_target_n: mean:", np.mean(b_target_n), ", std:", np.std(b_target_n))
             _, b_loss_val = sess.run([baseline_update_op, baseline_loss], feed_dict={sy_ob_no: ob_no, sy_b_target_n: b_target_n})
 
         #====================================================================================#
@@ -606,7 +626,7 @@ def train_PG(exp_name='',
         # YOUR_CODE_HERE
         feed_dict = {sy_ac_na: ac_na,
                      sy_ob_no: ob_no,
-                     sy_adv_n: q_n,
+                     sy_adv_n: adv_n,
                      sy_num_paths: [len(paths)]}
         print("num_batch:", sess.run(tf.shape(sy_ac_na)[0], feed_dict=feed_dict))
         print("num_paths:", sess.run(sy_num_paths[0], feed_dict=feed_dict))
@@ -622,17 +642,17 @@ def train_PG(exp_name='',
             print("test action samples:")
             print(sess.run(tf.multinomial(sy_logits_na, num_samples=1), feed_dict=feed_dict))
         else:
-            print("logstd:", sess.run(sy_logstd))
+            print("exp(logstd):", sess.run(tf.exp(sy_logstd)))
             #print("logstd_na:", sess.run(sy_logstd_na, feed_dict=feed_dict))
-            print("actions:")
-            print(ac_na)
-            print("neg log probs (gaussian log prob):")
-            print(sess.run(sy_logprob_n, feed_dict=feed_dict))
-        if nn_baseline:
-            print("b_n:")
-            print(b_n)
-            print("q_n:")
-            print(q_n)
+            #print("actions:")
+            #print(ac_na)
+            #print("neg log probs (gaussian log prob):")
+            #print(sess.run(sy_logprob_n, feed_dict=feed_dict))
+        #if nn_baseline:
+        #    print("b_n:")
+        #    print(b_n)
+        #    print("q_n:")
+        #    print(q_n)
         #loss_val_prev = sess.run(loss, feed_dict=feed_dict)
         _, loss_val = sess.run([update_op, loss], feed_dict=feed_dict)
 
